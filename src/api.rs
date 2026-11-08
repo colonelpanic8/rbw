@@ -394,6 +394,8 @@ struct SyncRes {
     profile: SyncResProfile,
     #[serde(rename = "Folders", alias = "folders")]
     folders: Vec<SyncResFolder>,
+    #[serde(default, rename = "userDecryption", alias = "UserDecryption")]
+    decryption: Option<crate::passkey::DecryptionOptions>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -1060,6 +1062,57 @@ impl Client {
         }
     }
 
+    pub async fn passkey_challenge(
+        &self,
+    ) -> Result<crate::passkey::Challenge> {
+        let res = self
+            .reqwest_client()
+            .await?
+            .get(self.identity_url("/accounts/webauthn/assertion-options"))
+            .send()
+            .await
+            .map_err(|source| Error::Reqwest { source })?;
+        if !res.status().is_success() {
+            return Err(Error::RequestFailed {
+                status: res.status().as_u16(),
+            });
+        }
+        res.json_with_path().await
+    }
+
+    pub async fn login_with_passkey(
+        &self,
+        device_id: &str,
+        token: &str,
+        device_response: &str,
+    ) -> Result<crate::passkey::LoginResponse> {
+        let device_type = DEVICE_TYPE.to_string();
+        let form = [
+            ("grant_type", "webauthn"),
+            ("scope", "api offline_access"),
+            ("client_id", "cli"),
+            ("deviceType", device_type.as_str()),
+            ("deviceIdentifier", device_id),
+            ("deviceName", "rbw"),
+            ("token", token),
+            ("deviceResponse", device_response),
+        ];
+        let res = self
+            .reqwest_client()
+            .await?
+            .post(self.identity_url("/connect/token"))
+            .form(&form)
+            .send()
+            .await
+            .map_err(|source| Error::Reqwest { source })?;
+        if !res.status().is_success() {
+            return Err(Error::RequestFailed {
+                status: res.status().as_u16(),
+            });
+        }
+        res.json_with_path().await
+    }
+
     pub async fn send_email_login(
         &self,
         email: &str,
@@ -1153,6 +1206,7 @@ impl Client {
         String,
         std::collections::HashMap<String, String>,
         Vec<crate::db::Entry>,
+        Option<Vec<crate::passkey::PrfOption>>,
     )> {
         let client = self.reqwest_client().await?;
         let res = client
@@ -1183,6 +1237,9 @@ impl Client {
                     sync_res.profile.private_key,
                     org_keys,
                     ciphers,
+                    sync_res
+                        .decryption
+                        .and_then(|options| options.web_authn_prf_options),
                 ))
             }
             reqwest::StatusCode::UNAUTHORIZED => {
@@ -1738,23 +1795,18 @@ fn classify_login_error(error_res: &ConnectErrorRes, code: u16) -> Error {
         "invalid_client" => {
             return Error::IncorrectApiKey;
         }
-        "" => {
-            // bitwarden_rs returns an empty error and error_description for
-            // this case, for some reason
-            if error_desc.is_none() || error_desc == Some("") {
-                if let Some(error_model) = error_res.error_model.as_ref() {
-                    let message = error_model.message.as_str().to_string();
-                    match message.as_str() {
-                        "Username or password is incorrect. Try again"
-                        | "TOTP code is not a number" => {
+        "" if error_desc.is_none() || error_desc == Some("") => {
+            // bitwarden_rs can return an empty error and error_description.
+            if let Some(error_model) = error_res.error_model.as_ref() {
+                let message = error_model.message.as_str().to_string();
+                match message.as_str() {
+                    "Username or password is incorrect. Try again"
+                    | "TOTP code is not a number" => {
+                        return Error::IncorrectPassword { message };
+                    }
+                    s => {
+                        if s.starts_with("Invalid TOTP code! Server time: ") {
                             return Error::IncorrectPassword { message };
-                        }
-                        s => {
-                            if s.starts_with(
-                                "Invalid TOTP code! Server time: ",
-                            ) {
-                                return Error::IncorrectPassword { message };
-                            }
                         }
                     }
                 }

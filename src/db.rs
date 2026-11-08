@@ -187,6 +187,8 @@ pub struct Db {
     pub protected_key: Option<String>,
     pub protected_private_key: Option<String>,
     pub protected_org_keys: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub passkey: Option<crate::passkey::CachedUnlock>,
 
     pub entries: Vec<Entry>,
 }
@@ -309,8 +311,9 @@ impl Db {
     pub fn needs_login(&self) -> bool {
         self.access_token.is_none()
             || self.refresh_token.is_none()
-            || self.iterations.is_none()
-            || self.kdf.is_none()
-            || self.protected_key.is_none()
+            || (self.passkey.is_none()
+                && (self.iterations.is_none()
+                    || self.kdf.is_none()
+                    || self.protected_key.is_none()))
     }
 }

@@ -18,6 +18,10 @@ pub struct Config {
     pub sync_interval: u64,
     #[serde(default = "default_pinentry")]
     pub pinentry: String,
+    #[serde(default)]
+    pub login_method: LoginMethod,
+    #[serde(default = "default_passkey_helper")]
+    pub passkey_helper: String,
     pub client_cert_path: Option<std::path::PathBuf>,
     // backcompat, no longer generated in new configs
     #[serde(skip_serializing)]
@@ -36,10 +40,33 @@ impl Default for Config {
             lock_timeout: default_lock_timeout(),
             sync_interval: default_sync_interval(),
             pinentry: default_pinentry(),
+            login_method: LoginMethod::default(),
+            passkey_helper: default_passkey_helper(),
             client_cert_path: None,
             device_id: None,
         }
     }
+}
+
+#[derive(
+    serde::Serialize,
+    serde::Deserialize,
+    Debug,
+    Default,
+    Copy,
+    Clone,
+    Eq,
+    PartialEq,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum LoginMethod {
+    #[default]
+    Password,
+    Passkey,
+}
+
+pub fn default_passkey_helper() -> String {
+    "rbw-passkey".to_string()
 }
 
 pub fn default_lock_timeout() -> u64 {

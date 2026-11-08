@@ -1,5 +1,9 @@
 # rbw
 
+This fork adds USB passkey login and local unlock with WebAuthn PRF, including
+Vaultwarden support and a Nix package for rofi-rbw. See [BUILDING.md](BUILDING.md)
+for setup and limitations. The upstream password-login path remains available.
+
 This is an unofficial command line client for
 [Bitwarden](https://bitwarden.com/). Although Bitwarden does come with its own
 [command line client](https://help.bitwarden.com/article/cli/), it is

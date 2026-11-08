@@ -1,17 +1,17 @@
 [package]
 name = "rbw"
-version = "1.15.0"
+version = "1.15.0-passkey.1"
 authors = ["Jesse Luehrs <doy@tozt.net>"]
 edition = "2021"
 rust-version = "1.82.0"
 
 description = "Unofficial Bitwarden CLI"
-repository = "https://github.com/doy/rbw"
+repository = "https://github.com/colonelpanic8/rbw"
 readme = "README.md"
 keywords = ["bitwarden"]
 categories = ["command-line-utilities", "cryptography"]
 license = "MIT"
-include = ["src/**/*", "bin/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
+include = ["src/**/*", "bin/**/*", "LICENSE", "README.md", "CHANGELOG.md", "tests/**/*"]
 
 [dependencies]
 aes = "0.8.4"

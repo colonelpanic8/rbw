@@ -1,3 +1,4 @@
+mod passkey;
 use anyhow::Context as _;
 
 mod actions;

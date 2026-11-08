@@ -1269,6 +1269,16 @@ pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
             config.sync_interval = interval;
         }
         "pinentry" => config.pinentry = value.to_string(),
+        "login_method" => {
+            config.login_method = match value {
+                "password" => rbw::config::LoginMethod::Password,
+                "passkey" => rbw::config::LoginMethod::Passkey,
+                _ => {
+                    anyhow::bail!("login_method must be password or passkey")
+                }
+            };
+        }
+        "passkey_helper" => config.passkey_helper = value.to_string(),
         _ => return Err(anyhow::anyhow!("invalid config key: {key}")),
     }
     config.save()?;
@@ -1298,6 +1308,12 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
             config.lock_timeout = rbw::config::default_lock_timeout();
         }
         "pinentry" => config.pinentry = rbw::config::default_pinentry(),
+        "login_method" => {
+            config.login_method = rbw::config::LoginMethod::default();
+        }
+        "passkey_helper" => {
+            config.passkey_helper = rbw::config::default_passkey_helper();
+        }
         _ => return Err(anyhow::anyhow!("invalid config key: {key}")),
     }
     config.save()?;
@@ -1507,8 +1523,7 @@ pub fn search(
         .filter(|entry| {
             entry
                 .as_ref()
-                .map(|entry| entry.search_match(term, folder))
-                .unwrap_or(true)
+                .map_or(true, |entry| entry.search_match(term, folder))
         })
         .map(|entry| entry.map(std::convert::Into::into))
         .collect::<Result<_, anyhow::Error>>()?;

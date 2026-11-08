@@ -1,3 +1,9 @@
 /pkg
 /target
 /target-ra
+/.direnv/
+/.worktrees/
+/.envrc.local
+/.envrc.override
+/result*
+__pycache__/

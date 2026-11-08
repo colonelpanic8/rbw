@@ -82,7 +82,17 @@ pub async fn login(
 ) -> anyhow::Result<()> {
     let db = load_db().await.unwrap_or_else(|_| rbw::db::Db::new());
 
-    if db.needs_login() {
+    let method = rbw::config::Config::load_async().await?.login_method;
+    if db.needs_login()
+        || (method == rbw::config::LoginMethod::Passkey
+            && db.passkey.is_none())
+        || (method == rbw::config::LoginMethod::Password && db.kdf.is_none())
+    {
+        if method == rbw::config::LoginMethod::Passkey {
+            crate::passkey::login(state, environment, db).await?;
+            respond_ack(sock).await?;
+            return Ok(());
+        }
         let url_str = config_base_url().await?;
         let url = reqwest::Url::parse(&url_str)
             .context("failed to parse base url")?;
@@ -377,6 +387,12 @@ async fn unlock_state(
 ) -> anyhow::Result<()> {
     if state.lock().await.needs_unlock() {
         let db = load_db().await?;
+        if rbw::config::Config::load_async().await?.login_method
+            == rbw::config::LoginMethod::Passkey
+        {
+            crate::passkey::unlock(state, environment, &db).await?;
+            return Ok(());
+        }
 
         let Some(kdf) = db.kdf else {
             return Err(anyhow::anyhow!("failed to find kdf type in db"));
@@ -523,7 +539,13 @@ pub async fn sync(
     };
     let (
         access_token,
-        (protected_key, protected_private_key, protected_org_keys, entries),
+        (
+            protected_key,
+            protected_private_key,
+            protected_org_keys,
+            entries,
+            passkey_options,
+        ),
     ) = rbw::actions::sync(&access_token, &refresh_token)
         .await
         .context("failed to sync database from server")?;
@@ -535,6 +557,20 @@ pub async fn sync(
     db.protected_private_key = Some(protected_private_key);
     db.protected_org_keys = protected_org_keys;
     db.entries = entries;
+    if let (Some(cached), Some(options)) = (&db.passkey, passkey_options) {
+        db.passkey = options
+            .into_iter()
+            .find(|option| {
+                rbw::passkey::same_credential(
+                    &option.credential_id,
+                    &cached.credential.credential_id,
+                )
+            })
+            .map(|credential| rbw::passkey::CachedUnlock {
+                credential,
+                ..cached.clone()
+            });
+    }
     save_db(&db).await?;
 
     if let Err(e) = subscribe_to_notifications(state.clone()).await {

@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""Perform one USB WebAuthn assertion; sensitive input and output use pipes."""
+
+import ctypes
+import json
+import resource
+import sys
+
+from fido2.client import DefaultClientDataCollector, Fido2Client, UserInteraction
+from fido2.hid import CtapHidDevice
+from fido2.utils import websafe_encode
+
+
+class Interaction(UserInteraction):
+    def __init__(self, pin):
+        self.pin = pin
+
+    def request_pin(self, permissions, rp_id):
+        pin, self.pin = self.pin, None
+        return pin
+
+    def prompt_up(self):
+        pass
+
+
+def assert_passkey(request, devices):
+    if len(devices) != 1:
+        raise ValueError("Connect exactly one USB security key, then try again")
+    options = request["options"]
+    if options.get("userVerification") != "required":
+        raise ValueError("User verification is required")
+    client = Fido2Client(
+        devices[0],
+        DefaultClientDataCollector(request["origin"]),
+        user_interaction=Interaction(request.pop("pin")),
+    )
+    selection = client.get_assertion(options)
+    if len(selection.get_assertions()) != 1:
+        raise ValueError("Multiple passkeys match; select a credential explicitly")
+    response = selection.get_response(0)
+    extensions = dict(response.client_extension_results)
+    prf = extensions.get("prf", {}).get("results", {}).get("first")
+    if not prf:
+        raise ValueError("This security key did not return a PRF result")
+    if isinstance(prf, bytes):
+        prf = websafe_encode(prf)
+    assertion = dict(response)
+    assertion.pop("clientExtensionResults", None)
+    assertion["extensions"] = {}
+    return {"assertion": assertion, "prf": prf}
+
+
+def main():
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    if sys.platform.startswith("linux"):
+        if ctypes.CDLL(None).prctl(4, 0, 0, 0, 0) != 0:
+            raise RuntimeError("Cannot disable tracing for the passkey helper")
+    raw = sys.stdin.buffer.read(131073)
+    if len(raw) > 131072:
+        raise ValueError("Passkey request is too large")
+    request = json.loads(raw)
+    del raw
+    devices = list(CtapHidDevice.list_devices())
+    try:
+        response = assert_passkey(request, devices)
+        json.dump(response, sys.stdout)
+        sys.stdout.write("\n")
+    finally:
+        for device in devices:
+            device.close()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        print(f"{type(error).__name__}: {error}", file=sys.stderr)
+        raise SystemExit(1) from None

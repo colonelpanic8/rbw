@@ -16,9 +16,14 @@ pub enum CipherString {
         mac: Option<Vec<u8>>,
     },
     Asymmetric {
-        // ty: 4 (RSA_2048_OAEP_SHA1)
         ciphertext: Vec<u8>,
+        hash: RsaHash,
     },
+}
+
+pub enum RsaHash {
+    Sha1,
+    Sha256,
 }
 
 impl CipherString {
@@ -71,7 +76,7 @@ impl CipherString {
                     mac,
                 })
             }
-            4 | 6 => {
+            3 | 4 | 6 => {
                 // the only difference between 4 and 6 is the HMAC256
                 // signature appended at the end
                 // https://github.com/bitwarden/jslib/blob/785b681f61f81690de6df55159ab07ae710bcfad/src/enums/encryptionType.ts#L8
@@ -79,7 +84,12 @@ impl CipherString {
                 let contents = contents.split('|').next().unwrap();
                 let ciphertext = crate::base64::decode(contents)
                     .map_err(|source| Error::InvalidBase64 { source })?;
-                Ok(Self::Asymmetric { ciphertext })
+                let hash = if ty == 3 {
+                    RsaHash::Sha256
+                } else {
+                    RsaHash::Sha1
+                };
+                Ok(Self::Asymmetric { ciphertext, hash })
             }
             _ => {
                 if ty < 6 {
@@ -184,14 +194,18 @@ impl CipherString {
         &self,
         private_key: &crate::locked::PrivateKey,
     ) -> Result<crate::locked::Vec> {
-        if let Self::Asymmetric { ciphertext } = self {
+        if let Self::Asymmetric { ciphertext, hash } = self {
             let privkey_data = private_key.private_key();
             let privkey_data =
                 pkcs7_unpad(privkey_data).ok_or(Error::Padding)?;
             let pkey = rsa::RsaPrivateKey::from_pkcs8_der(privkey_data)
                 .map_err(|source| Error::RsaPkcs8 { source })?;
+            let padding = match hash {
+                RsaHash::Sha1 => rsa::Oaep::new::<sha1::Sha1>(),
+                RsaHash::Sha256 => rsa::Oaep::new::<sha2::Sha256>(),
+            };
             let mut bytes = pkey
-                .decrypt(rsa::Oaep::new::<sha1::Sha1>(), ciphertext)
+                .decrypt(padding, ciphertext)
                 .map_err(|source| Error::Rsa { source })?;
 
             // XXX it'd be great if the rsa crate would let us decrypt
@@ -251,9 +265,13 @@ impl std::fmt::Display for CipherString {
                     write!(f, "2.{iv}|{ciphertext}")
                 }
             }
-            Self::Asymmetric { ciphertext } => {
+            Self::Asymmetric { ciphertext, hash } => {
                 let ciphertext = crate::base64::encode(ciphertext);
-                write!(f, "4.{ciphertext}")
+                let ty = match hash {
+                    RsaHash::Sha1 => 4,
+                    RsaHash::Sha256 => 3,
+                };
+                write!(f, "{ty}.{ciphertext}")
             }
         }
     }
