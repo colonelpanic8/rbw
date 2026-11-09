@@ -15,14 +15,7 @@ async fn pin(
     config: &rbw::config::Config,
     environment: &rbw::protocol::Environment,
 ) -> anyhow::Result<Option<rbw::locked::Password>> {
-    let required =
-        rbw::passkey::pin_required(config)
-            .await
-            .unwrap_or_else(|e| {
-                eprintln!("{e:#}");
-                true
-            });
-    if !required {
+    if !rbw::passkey::pin_required(config).await? {
         return Ok(None);
     }
     let pin = rbw::pinentry::getpin(

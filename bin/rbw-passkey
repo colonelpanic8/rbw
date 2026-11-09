@@ -53,10 +53,7 @@ def assert_passkey(request, devices):
 
 def pin_required(device):
     """Mirror Fido2Client: a PIN is used only without built-in UV."""
-    try:
-        options = Ctap2(device).info.options
-    except Exception:
-        return True
+    options = Ctap2(device).info.options
     return bool(options.get("clientPin")) and not options.get("uv")
 
 

@@ -96,4 +96,5 @@ class PasskeyHelperTests(unittest.TestCase):
                 ctap2.return_value.info.options = options
                 self.assertEqual(helper.pin_required(object()), required, options)
         with patch.object(helper, "Ctap2", side_effect=OSError):
-            self.assertTrue(helper.pin_required(object()))
+            with self.assertRaises(OSError):
+                helper.pin_required(object())
