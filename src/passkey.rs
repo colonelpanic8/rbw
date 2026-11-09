@@ -41,10 +41,34 @@ pub struct LoginResponse {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(from = "StoredUnlock")]
 pub struct CachedUnlock {
     pub origin: String,
     pub relying_party_id: String,
-    pub credential: PrfOption,
+    /// Every passkey the server has enabled for vault encryption.
+    pub credentials: Vec<PrfOption>,
+}
+
+/// Also reads caches written when only the login credential was kept.
+#[derive(serde::Deserialize)]
+struct StoredUnlock {
+    origin: String,
+    relying_party_id: String,
+    #[serde(default)]
+    credentials: Vec<PrfOption>,
+    credential: Option<PrfOption>,
+}
+
+impl From<StoredUnlock> for CachedUnlock {
+    fn from(stored: StoredUnlock) -> Self {
+        let mut credentials = stored.credentials;
+        credentials.extend(stored.credential);
+        Self {
+            origin: stored.origin,
+            relying_party_id: stored.relying_party_id,
+            credentials,
+        }
+    }
 }
 
 pub struct Assertion {
@@ -285,12 +309,35 @@ impl CachedUnlock {
         config: &crate::config::Config,
     ) -> anyhow::Result<serde_json::Value> {
         anyhow::ensure!(self.origin == origin(config)?, "cached passkey belongs to a different web vault origin; log in again");
+        anyhow::ensure!(
+            !self.credentials.is_empty(),
+            "no cached passkey is enabled for vault encryption; log in again"
+        );
         let challenge: [u8; 32] = rand::random();
+        let allowed: Vec<_> = self
+            .credentials
+            .iter()
+            .map(|credential| {
+                serde_json::json!({"type": "public-key", "id": credential.credential_id})
+            })
+            .collect();
         Ok(serde_json::json!({
             "challenge": crate::base64::encode_url_safe_no_pad(challenge),
             "rpId": self.relying_party_id,
-            "allowCredentials": [{"type": "public-key", "id": self.credential.credential_id}],
+            "allowCredentials": allowed,
         }))
+    }
+
+    pub fn credential(
+        &self,
+        assertion: &Assertion,
+    ) -> anyhow::Result<&PrfOption> {
+        self.credentials
+            .iter()
+            .find(|credential| {
+                same_credential(&credential.credential_id, &assertion.credential_id)
+            })
+            .context("security key used a passkey that is not cached for vault encryption")
     }
 }
 
@@ -363,18 +410,42 @@ mod tests {
     }
 
     #[test]
-    fn passkey_cached_unlock_is_bound_to_origin_and_credential() {
+    fn passkey_cached_unlock_is_bound_to_origin_and_credentials() {
         let mut config = crate::config::Config::new();
         config.base_url = Some("https://vault.example.test:8222".to_string());
+        let mut other = fixture().option;
+        other.credential_id = "BAUG".to_string();
         let cached = CachedUnlock {
             origin: origin(&config).unwrap(),
             relying_party_id: "vault.example.test".to_string(),
-            credential: fixture().option,
+            credentials: vec![fixture().option, other],
         };
         let first = cached.request(&config).unwrap();
         let second = cached.request(&config).unwrap();
         assert_ne!(first["challenge"], second["challenge"]);
         assert_eq!(first["allowCredentials"][0]["id"], "AQID");
+        assert_eq!(first["allowCredentials"][1]["id"], "BAUG");
+        let assertion = |credential_id: &str| Assertion {
+            credential_id: credential_id.to_string(),
+            device_response: String::new(),
+            prf: crate::locked::Vec::new(),
+        };
+        assert_eq!(
+            cached.credential(&assertion("BAUG")).unwrap().credential_id,
+            "BAUG"
+        );
+        assert!(cached.credential(&assertion("BwgJ")).is_err());
+        let legacy: CachedUnlock = serde_json::from_value(serde_json::json!({
+            "origin": cached.origin, "relying_party_id": "vault.example.test",
+            "credential": fixture().option,
+        }))
+        .unwrap();
+        assert_eq!(legacy.credentials.len(), 1);
+        let empty = CachedUnlock {
+            credentials: vec![],
+            ..cached.clone()
+        };
+        assert!(empty.request(&config).is_err());
         config.base_url = Some("https://other.example.test".to_string());
         assert!(cached.request(&config).is_err());
         config.base_url = Some("http://vault.example.test".to_string());
@@ -418,7 +489,7 @@ mod tests {
         db.passkey = Some(CachedUnlock {
             origin: "https://vault.example.test".to_string(),
             relying_party_id: "vault.example.test".to_string(),
-            credential: fixture().option,
+            credentials: vec![fixture().option],
         });
         assert!(!db.needs_login());
         db.access_token = None;

@@ -586,16 +586,9 @@ pub async fn sync(
     db.protected_org_keys = protected_org_keys;
     db.entries = entries;
     if let (Some(cached), Some(options)) = (&db.passkey, passkey_options) {
-        db.passkey = options
-            .into_iter()
-            .find(|option| {
-                rbw::passkey::same_credential(
-                    &option.credential_id,
-                    &cached.credential.credential_id,
-                )
-            })
-            .map(|credential| rbw::passkey::CachedUnlock {
-                credential,
+        db.passkey =
+            (!options.is_empty()).then(|| rbw::passkey::CachedUnlock {
+                credentials: options,
                 ..cached.clone()
             });
     }

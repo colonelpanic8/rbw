@@ -104,17 +104,20 @@ pub async fn login(
         &protected_private_key,
         &protected_org_keys,
     )?;
-    let credential = match options {
-        Some(options) => options
-            .into_iter()
-            .find(|option| {
-                rbw::passkey::same_credential(
-                    &option.credential_id,
-                    &credential.credential_id,
-                )
-            })
-            .context("passkey was removed while logging in")?,
-        None => credential,
+    let credentials = match options {
+        Some(options) => {
+            anyhow::ensure!(
+                options.iter().any(|option| {
+                    rbw::passkey::same_credential(
+                        &option.credential_id,
+                        &credential.credential_id,
+                    )
+                }),
+                "passkey was removed while logging in"
+            );
+            options
+        }
+        None => vec![credential],
     };
     db.access_token = Some(access_token.unwrap_or(response.access_token));
     db.refresh_token = Some(response.refresh_token);
@@ -125,7 +128,7 @@ pub async fn login(
     db.passkey = Some(rbw::passkey::CachedUnlock {
         origin: rbw::passkey::origin(&config)?,
         relying_party_id,
-        credential,
+        credentials,
     });
     // Cached so master-password unlock still works offline without the key.
     match rbw::actions::prelogin(email).await {
@@ -160,7 +163,10 @@ pub async fn unlock(
     let assertion =
         rbw::passkey::assert(&config, request, pin.as_ref()).await?;
     drop(pin);
-    let key = rbw::passkey::decrypt_user_key(&cached.credential, &assertion)?;
+    let key = rbw::passkey::decrypt_user_key(
+        cached.credential(&assertion)?,
+        &assertion,
+    )?;
     let (key, org_keys) = rbw::actions::unlock_with_key(
         key,
         db.protected_private_key
