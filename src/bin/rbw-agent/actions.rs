@@ -80,7 +80,7 @@ pub async fn login(
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     environment: &rbw::protocol::Environment,
 ) -> anyhow::Result<()> {
-    let db = load_db().await.unwrap_or_else(|_| rbw::db::Db::new());
+    let mut db = load_db().await.unwrap_or_else(|_| rbw::db::Db::new());
 
     let config = rbw::config::Config::load_async().await?;
     if config.login_method == rbw::config::LoginMethod::Passkey
@@ -90,12 +90,20 @@ pub async fn login(
         respond_ack(sock).await?;
         return Ok(());
     }
+    let mut passkey_error = None;
     if config.login_method == rbw::config::LoginMethod::Passkey
         && crate::passkey::security_key_present(&config).await
     {
-        crate::passkey::login(state, environment, db).await?;
-        respond_ack(sock).await?;
-        return Ok(());
+        match crate::passkey::login(state.clone(), environment, db).await {
+            Ok(()) => {
+                respond_ack(sock).await?;
+                return Ok(());
+            }
+            Err(e) => {
+                passkey_error = Some(security_key_failure(&e));
+                db = load_db().await.unwrap_or_else(|_| rbw::db::Db::new());
+            }
+        }
     }
     if db.needs_login() || db.kdf.is_none() {
         let url_str = config_base_url().await?;
@@ -116,7 +124,7 @@ pub async fn login(
                 // if we have set err_msg
                 Some(format!("{} (attempt {}/3)", err_msg.unwrap(), i))
             } else {
-                None
+                passkey_error.take()
             };
             let password = rbw::pinentry::getpin(
                 &config_pinentry().await?,
@@ -386,6 +394,13 @@ async fn login_success(
     Ok(())
 }
 
+fn security_key_failure(e: &anyhow::Error) -> String {
+    eprintln!(
+        "security-key unlock failed, falling back to master password: {e:#}"
+    );
+    format!("Security key failed: {e:#}")
+}
+
 async fn unlock_state(
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     environment: &rbw::protocol::Environment,
@@ -395,12 +410,17 @@ async fn unlock_state(
         let config = rbw::config::Config::load_async().await?;
         let passkey_method =
             config.login_method == rbw::config::LoginMethod::Passkey;
+        let mut passkey_error = None;
         if passkey_method
             && db.passkey.is_some()
             && crate::passkey::security_key_present(&config).await
         {
-            crate::passkey::unlock(state, environment, &db).await?;
-            return Ok(());
+            match crate::passkey::unlock(state.clone(), environment, &db)
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(e) => passkey_error = Some(security_key_failure(&e)),
+            }
         }
 
         if db.kdf.is_none() || db.iterations.is_none() {
@@ -448,12 +468,17 @@ async fn unlock_state(
                 // if we have set err_msg
                 Some(format!("{} (attempt {}/3)", err_msg.unwrap(), i))
             } else {
-                None
+                passkey_error.clone()
             };
             let password = rbw::pinentry::getpin(
                 &config_pinentry().await?,
                 "Master Password",
-                &if passkey_method {
+                &if passkey_error.is_some() {
+                    format!(
+                        "Unlock the local database for '{}' with your master password",
+                        rbw::dirs::profile()
+                    )
+                } else if passkey_method {
                     format!(
                         "No security key detected. Unlock the local database for '{}' with your master password",
                         rbw::dirs::profile()
