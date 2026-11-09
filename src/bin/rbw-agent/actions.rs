@@ -82,17 +82,22 @@ pub async fn login(
 ) -> anyhow::Result<()> {
     let db = load_db().await.unwrap_or_else(|_| rbw::db::Db::new());
 
-    let method = rbw::config::Config::load_async().await?.login_method;
-    if db.needs_login()
-        || (method == rbw::config::LoginMethod::Passkey
-            && db.passkey.is_none())
-        || (method == rbw::config::LoginMethod::Password && db.kdf.is_none())
+    let config = rbw::config::Config::load_async().await?;
+    if config.login_method == rbw::config::LoginMethod::Passkey
+        && !db.needs_login()
+        && db.passkey.is_some()
     {
-        if method == rbw::config::LoginMethod::Passkey {
-            crate::passkey::login(state, environment, db).await?;
-            respond_ack(sock).await?;
-            return Ok(());
-        }
+        respond_ack(sock).await?;
+        return Ok(());
+    }
+    if config.login_method == rbw::config::LoginMethod::Passkey
+        && crate::passkey::security_key_present(&config).await
+    {
+        crate::passkey::login(state, environment, db).await?;
+        respond_ack(sock).await?;
+        return Ok(());
+    }
+    if db.needs_login() || db.kdf.is_none() {
         let url_str = config_base_url().await?;
         let url = reqwest::Url::parse(&url_str)
             .context("failed to parse base url")?;
@@ -386,12 +391,28 @@ async fn unlock_state(
     environment: &rbw::protocol::Environment,
 ) -> anyhow::Result<()> {
     if state.lock().await.needs_unlock() {
-        let db = load_db().await?;
-        if rbw::config::Config::load_async().await?.login_method
-            == rbw::config::LoginMethod::Passkey
+        let mut db = load_db().await?;
+        let config = rbw::config::Config::load_async().await?;
+        let passkey_method =
+            config.login_method == rbw::config::LoginMethod::Passkey;
+        if passkey_method
+            && db.passkey.is_some()
+            && crate::passkey::security_key_present(&config).await
         {
             crate::passkey::unlock(state, environment, &db).await?;
             return Ok(());
+        }
+
+        if db.kdf.is_none() || db.iterations.is_none() {
+            let (kdf, iterations, memory, parallelism) =
+                rbw::actions::prelogin(&config_email().await?)
+                    .await
+                    .context("failed to fetch kdf parameters")?;
+            db.kdf = Some(kdf);
+            db.iterations = Some(iterations);
+            db.memory = memory;
+            db.parallelism = parallelism;
+            save_db(&db).await?;
         }
 
         let Some(kdf) = db.kdf else {
@@ -432,10 +453,17 @@ async fn unlock_state(
             let password = rbw::pinentry::getpin(
                 &config_pinentry().await?,
                 "Master Password",
-                &format!(
-                    "Unlock the local database for '{}'",
-                    rbw::dirs::profile()
-                ),
+                &if passkey_method {
+                    format!(
+                        "No security key detected. Unlock the local database for '{}' with your master password",
+                        rbw::dirs::profile()
+                    )
+                } else {
+                    format!(
+                        "Unlock the local database for '{}'",
+                        rbw::dirs::profile()
+                    )
+                },
                 err.as_deref(),
                 environment,
                 true,

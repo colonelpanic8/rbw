@@ -30,6 +30,17 @@ async fn pin(
     Ok(pin)
 }
 
+/// Probe failures count as present so the passkey path reports the error.
+pub async fn security_key_present(config: &rbw::config::Config) -> bool {
+    match rbw::passkey::security_key_count(config).await {
+        Ok(count) => count > 0,
+        Err(e) => {
+            eprintln!("{e:#}");
+            true
+        }
+    }
+}
+
 pub async fn login(
     state: State,
     environment: &rbw::protocol::Environment,
@@ -105,6 +116,16 @@ pub async fn login(
         relying_party_id,
         credential,
     });
+    // Cached so master-password unlock still works offline without the key.
+    match rbw::actions::prelogin(email).await {
+        Ok((kdf, iterations, memory, parallelism)) => {
+            db.kdf = Some(kdf);
+            db.iterations = Some(iterations);
+            db.memory = memory;
+            db.parallelism = parallelism;
+        }
+        Err(e) => eprintln!("failed to fetch kdf parameters: {e:#}"),
+    }
     db.save_async(&config.server_name(), email).await?;
     let mut state = state.lock().await;
     state.set_master_password_reprompt(&db.entries);

@@ -50,7 +50,17 @@ def assert_passkey(request, devices):
     return {"assertion": assertion, "prf": prf}
 
 
+def probe():
+    devices = list(CtapHidDevice.list_devices())
+    for device in devices:
+        device.close()
+    print(len(devices))
+
+
 def main():
+    if sys.argv[1:] == ["--probe"]:
+        probe()
+        return
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     if sys.platform.startswith("linux"):
         if ctypes.CDLL(None).prctl(4, 0, 0, 0, 0) != 0:

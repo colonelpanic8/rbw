@@ -61,6 +61,13 @@ pub async fn login(
     ))
 }
 
+pub async fn prelogin(
+    email: &str,
+) -> Result<(crate::api::KdfType, u32, Option<u32>, Option<u32>)> {
+    let (client, _) = api_client_async().await?;
+    client.prelogin(email).await
+}
+
 pub async fn send_two_factor_email(
     email: &str,
     sso_email_2fa_session_token: &str,

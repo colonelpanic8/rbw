@@ -102,6 +102,31 @@ pub fn same_credential(first: &str, second: &str) -> bool {
     }
 }
 
+pub async fn security_key_count(
+    config: &crate::config::Config,
+) -> anyhow::Result<usize> {
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::process::Command::new(&config.passkey_helper)
+            .arg("--probe")
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .context("security-key probe timed out")?
+    .context("could not start rbw-passkey; install the passkey helper")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "security-key probe failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    std::str::from_utf8(&output.stdout)?
+        .trim()
+        .parse()
+        .context("invalid security-key probe response")
+}
+
 pub async fn assert(
     config: &crate::config::Config,
     mut options: serde_json::Value,
