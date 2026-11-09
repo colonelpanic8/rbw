@@ -14,7 +14,17 @@ fn client(config: &rbw::config::Config) -> rbw::api::Client {
 async fn pin(
     config: &rbw::config::Config,
     environment: &rbw::protocol::Environment,
-) -> anyhow::Result<rbw::locked::Password> {
+) -> anyhow::Result<Option<rbw::locked::Password>> {
+    let required =
+        rbw::passkey::pin_required(config)
+            .await
+            .unwrap_or_else(|e| {
+                eprintln!("{e:#}");
+                true
+            });
+    if !required {
+        return Ok(None);
+    }
     let pin = rbw::pinentry::getpin(
         &config.pinentry,
         "Security key PIN",
@@ -27,7 +37,7 @@ async fn pin(
         !pin.password().is_empty(),
         "security-key PIN entry was cancelled"
     );
-    Ok(pin)
+    Ok(Some(pin))
 }
 
 /// Probe failures count as present so the passkey path reports the error.
@@ -56,7 +66,8 @@ pub async fn login(
         .context("server did not supply a relying-party ID")?
         .to_string();
     let assertion =
-        rbw::passkey::assert(&config, challenge.options, &pin).await?;
+        rbw::passkey::assert(&config, challenge.options, pin.as_ref())
+            .await?;
     drop(pin);
     let response = client
         .login_with_passkey(
@@ -146,7 +157,8 @@ pub async fn unlock(
         .context("no cached passkey; log in with a passkey first")?;
     let request = cached.request(&config)?;
     let pin = pin(&config, environment).await?;
-    let assertion = rbw::passkey::assert(&config, request, &pin).await?;
+    let assertion =
+        rbw::passkey::assert(&config, request, pin.as_ref()).await?;
     drop(pin);
     let key = rbw::passkey::decrypt_user_key(&cached.credential, &assertion)?;
     let (key, org_keys) = rbw::actions::unlock_with_key(

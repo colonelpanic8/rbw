@@ -26,8 +26,9 @@ nix run . -- login
 ```
 
 The passkey must already have vault encryption enabled in the web vault.
-Connect one USB security key, enter its PIN in pinentry, and touch it when it
-flashes. No master password is needed for passkey login or subsequent local
+Connect one security key, enter its PIN in pinentry, and touch it when it
+flashes. Keys that verify the user themselves (a fingerprint, or a watch's own
+screen lock) and have no client PIN skip the pinentry prompt. No master password is needed for passkey login or subsequent local
 unlocks. The encrypted cache contains the credential ID and encrypted key
 material; locking drops the decrypted keys from the agent. Local unlock can
 work offline. Sync refreshes the encrypted key material and removes the local

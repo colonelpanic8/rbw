@@ -57,7 +57,7 @@ pub struct Assertion {
 struct HelperRequest<'a> {
     origin: String,
     options: serde_json::Value,
-    pin: &'a str,
+    pin: Option<&'a str>,
 }
 
 #[derive(serde::Deserialize)]
@@ -102,13 +102,14 @@ pub fn same_credential(first: &str, second: &str) -> bool {
     }
 }
 
-pub async fn security_key_count(
+async fn probe_helper(
     config: &crate::config::Config,
-) -> anyhow::Result<usize> {
+    arg: &str,
+) -> anyhow::Result<String> {
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         tokio::process::Command::new(&config.passkey_helper)
-            .arg("--probe")
+            .arg(arg)
             .stdin(std::process::Stdio::null())
             .kill_on_drop(true)
             .output(),
@@ -121,16 +122,33 @@ pub async fn security_key_count(
         "security-key probe failed: {}",
         String::from_utf8_lossy(&output.stderr).trim()
     );
-    std::str::from_utf8(&output.stdout)?
-        .trim()
+    Ok(std::str::from_utf8(&output.stdout)?.trim().to_string())
+}
+
+pub async fn security_key_count(
+    config: &crate::config::Config,
+) -> anyhow::Result<usize> {
+    probe_helper(config, "--probe")
+        .await?
         .parse()
         .context("invalid security-key probe response")
+}
+
+/// False when the key verifies the user itself, e.g. with a fingerprint or
+/// its own screen lock, and has no client PIN to fall back to.
+pub async fn pin_required(
+    config: &crate::config::Config,
+) -> anyhow::Result<bool> {
+    probe_helper(config, "--probe-pin")
+        .await?
+        .parse()
+        .context("invalid security-key PIN probe response")
 }
 
 pub async fn assert(
     config: &crate::config::Config,
     mut options: serde_json::Value,
-    pin: &crate::locked::Password,
+    pin: Option<&crate::locked::Password>,
 ) -> anyhow::Result<Assertion> {
     options["userVerification"] = serde_json::json!("required");
     options["extensions"] =
@@ -139,7 +157,9 @@ pub async fn assert(
     let request = Zeroizing::new(serde_json::to_vec(&HelperRequest {
         origin: origin(config)?,
         options,
-        pin: std::str::from_utf8(pin.password())?,
+        pin: pin
+            .map(|pin| std::str::from_utf8(pin.password()))
+            .transpose()?,
     })?);
     let mut child = tokio::process::Command::new(&config.passkey_helper)
         .stdin(std::process::Stdio::piped())

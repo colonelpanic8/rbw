@@ -7,6 +7,7 @@ import resource
 import sys
 
 from fido2.client import DefaultClientDataCollector, Fido2Client, UserInteraction
+from fido2.ctap2 import Ctap2
 from fido2.hid import CtapHidDevice
 from fido2.utils import websafe_encode
 
@@ -50,6 +51,25 @@ def assert_passkey(request, devices):
     return {"assertion": assertion, "prf": prf}
 
 
+def pin_required(device):
+    """Mirror Fido2Client: a PIN is used only without built-in UV."""
+    try:
+        options = Ctap2(device).info.options
+    except Exception:
+        return True
+    return bool(options.get("clientPin")) and not options.get("uv")
+
+
+def probe_pin():
+    devices = list(CtapHidDevice.list_devices())
+    try:
+        required = len(devices) != 1 or pin_required(devices[0])
+    finally:
+        for device in devices:
+            device.close()
+    print("true" if required else "false")
+
+
 def probe():
     devices = list(CtapHidDevice.list_devices())
     for device in devices:
@@ -60,6 +80,9 @@ def probe():
 def main():
     if sys.argv[1:] == ["--probe"]:
         probe()
+        return
+    if sys.argv[1:] == ["--probe-pin"]:
+        probe_pin()
         return
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     if sys.platform.startswith("linux"):

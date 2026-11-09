@@ -83,3 +83,17 @@ class PasskeyHelperTests(unittest.TestCase):
         self.request["options"]["userVerification"] = "discouraged"
         with self.assertRaisesRegex(ValueError, "verification"):
             helper.assert_passkey(self.request, [object()])
+
+    def test_pin_is_only_required_without_built_in_uv(self):
+        cases = [
+            ({"clientPin": True}, True),
+            ({"clientPin": True, "uv": True}, False),
+            ({"uv": True}, False),
+            ({"clientPin": False}, False),
+        ]
+        for options, required in cases:
+            with patch.object(helper, "Ctap2") as ctap2:
+                ctap2.return_value.info.options = options
+                self.assertEqual(helper.pin_required(object()), required, options)
+        with patch.object(helper, "Ctap2", side_effect=OSError):
+            self.assertTrue(helper.pin_required(object()))
