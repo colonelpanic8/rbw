@@ -84,6 +84,15 @@ class PasskeyHelperTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "verification"):
             helper.assert_passkey(self.request, [object()])
 
+    def test_assertion_may_omit_its_only_allowed_credential(self):
+        allowed = {"type": "public-key", "id": b"credential"}
+        reply = {2: bytes(32) + b"\x05" + bytes(4), 3: b"signature"}
+        ctap = SimpleNamespace(send_cbor=lambda *_args, **_kwargs: reply)
+        assertion = helper.get_assertion(ctap, "example.test", bytes(32), [allowed])
+        self.assertEqual(assertion.credential, allowed)
+        with self.assertRaises(TypeError):
+            helper.get_assertion(ctap, "example.test", bytes(32), [allowed, allowed])
+
     def test_pin_is_only_required_without_built_in_uv(self):
         cases = [
             ({"clientPin": True}, True),

@@ -7,9 +7,34 @@ import resource
 import sys
 
 from fido2.client import DefaultClientDataCollector, Fido2Client, UserInteraction
-from fido2.ctap2 import Ctap2
+from fido2.ctap2 import AssertionResponse, Ctap2
+from fido2.ctap2.base import args
 from fido2.hid import CtapHidDevice
 from fido2.utils import websafe_encode
+
+
+def get_assertion(
+    self, rp_id, client_data_hash, allow_list=None, extensions=None, options=None,
+    pin_uv_param=None, pin_uv_protocol=None, *, event=None, on_keepalive=None,
+):
+    """Like Ctap2.get_assertion, but accepts a response that omits the credential.
+
+    CTAP allows that when the allow list names exactly one credential (WearAuthn
+    does so), and python-fido2 would otherwise fail to parse the response.
+    """
+    response = self.send_cbor(
+        Ctap2.CMD.GET_ASSERTION,
+        args(rp_id, client_data_hash, allow_list, extensions, options,
+             pin_uv_param, pin_uv_protocol),
+        event=event,
+        on_keepalive=on_keepalive,
+    )
+    if allow_list and len(allow_list) == 1:
+        response = {1: allow_list[0], **response}
+    return AssertionResponse.from_dict(response)
+
+
+Ctap2.get_assertion = get_assertion
 
 
 class Interaction(UserInteraction):
