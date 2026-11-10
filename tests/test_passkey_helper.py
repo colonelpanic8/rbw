@@ -93,6 +93,12 @@ class PasskeyHelperTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             helper.get_assertion(ctap, "example.test", bytes(32), [allowed, allowed])
 
+    def test_reports_for_other_channels_are_skipped(self):
+        theirs, ours = bytes.fromhex("0000000a") + b"stale", bytes.fromhex("0000000b") + b"reply"
+        connection = SimpleNamespace(read_packet=iter([theirs, ours]).__next__)
+        channel = helper.OwnChannel(SimpleNamespace(_channel_id=0x0B), connection)
+        self.assertEqual(channel.read_packet(), ours)
+
     def test_pin_is_only_required_without_built_in_uv(self):
         cases = [
             ({"clientPin": True}, True),

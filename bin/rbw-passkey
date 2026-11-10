@@ -37,6 +37,38 @@ def get_assertion(
 Ctap2.get_assertion = get_assertion
 
 
+class OwnChannel:
+    """Drops HID reports addressed to other CTAPHID channels.
+
+    Every client of a hidraw device sees every report, and CTAPHID clients must
+    ignore channels they don't own; python-fido2 instead fails with "Wrong
+    channel" when another client or a late reply to an aborted request is
+    active.
+    """
+
+    def __init__(self, device, connection):
+        self.device = device
+        self.connection = connection
+
+    def read_packet(self):
+        while True:
+            packet = self.connection.read_packet()
+            if int.from_bytes(packet[:4], "big") == self.device._channel_id:
+                return packet
+
+    def write_packet(self, packet):
+        self.connection.write_packet(packet)
+
+    def close(self):
+        self.connection.close()
+
+
+class HidDevice(CtapHidDevice):
+    def __init__(self, descriptor, connection):
+        self._channel_id = 0xFFFFFFFF
+        super().__init__(descriptor, OwnChannel(self, connection))
+
+
 class Interaction(UserInteraction):
     def __init__(self, pin):
         self.pin = pin
@@ -83,7 +115,7 @@ def pin_required(device):
 
 
 def probe_pin():
-    devices = list(CtapHidDevice.list_devices())
+    devices = list(HidDevice.list_devices())
     try:
         required = len(devices) != 1 or pin_required(devices[0])
     finally:
@@ -93,7 +125,7 @@ def probe_pin():
 
 
 def probe():
-    devices = list(CtapHidDevice.list_devices())
+    devices = list(HidDevice.list_devices())
     for device in devices:
         device.close()
     print(len(devices))
@@ -115,7 +147,7 @@ def main():
         raise ValueError("Passkey request is too large")
     request = json.loads(raw)
     del raw
-    devices = list(CtapHidDevice.list_devices())
+    devices = list(HidDevice.list_devices())
     try:
         response = assert_passkey(request, devices)
         json.dump(response, sys.stdout)
