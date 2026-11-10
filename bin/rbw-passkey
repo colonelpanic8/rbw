@@ -5,6 +5,7 @@ import ctypes
 import json
 import resource
 import sys
+import time
 
 from fido2.client import DefaultClientDataCollector, Fido2Client, UserInteraction
 from fido2.ctap2 import AssertionResponse, Ctap2
@@ -72,13 +73,14 @@ class HidDevice(CtapHidDevice):
 class Interaction(UserInteraction):
     def __init__(self, pin):
         self.pin = pin
+        self.prompted = False
 
     def request_pin(self, permissions, rp_id):
         pin, self.pin = self.pin, None
         return pin
 
     def prompt_up(self):
-        pass
+        self.prompted = True
 
 
 def assert_passkey(request, devices):
@@ -87,12 +89,24 @@ def assert_passkey(request, devices):
     options = request["options"]
     if options.get("userVerification") != "required":
         raise ValueError("User verification is required")
+    interaction = Interaction(request.pop("pin"))
     client = Fido2Client(
         devices[0],
         DefaultClientDataCollector(request["origin"]),
-        user_interaction=Interaction(request.pop("pin")),
+        user_interaction=interaction,
     )
-    selection = client.get_assertion(options)
+    started = time.monotonic()
+    try:
+        selection = client.get_assertion(options)
+    except Exception as error:
+        prompt = (
+            "after asking for approval"
+            if interaction.prompted
+            else "without asking for approval"
+        )
+        raise RuntimeError(
+            f"{type(error).__name__}: {error} ({prompt}, {time.monotonic() - started:.0f}s)"
+        ) from None
     if len(selection.get_assertions()) != 1:
         raise ValueError("Multiple passkeys match; select a credential explicitly")
     response = selection.get_response(0)

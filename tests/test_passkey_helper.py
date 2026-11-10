@@ -74,6 +74,16 @@ class PasskeyHelperTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Multiple passkeys"):
                 helper.assert_passkey(self.request, [object()])
 
+    def test_failure_says_whether_the_key_prompted(self):
+        def get_assertion(_options):
+            client.call_args.kwargs["user_interaction"].prompt_up()
+            raise OSError("denied")
+
+        with patch.object(helper, "Fido2Client") as client:
+            client.return_value.get_assertion.side_effect = get_assertion
+            with self.assertRaisesRegex(RuntimeError, r"OSError: denied \(after asking for approval, \d+s\)"):
+                helper.assert_passkey(self.request, [object()])
+
     def test_pin_is_not_automatically_retried(self):
         interaction = helper.Interaction("synthetic-test-pin")
         self.assertEqual(interaction.request_pin(None, None), "synthetic-test-pin")
